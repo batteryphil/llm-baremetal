@@ -1,0 +1,12 @@
+organism_id=sovereign
+genesis_id=genesis
+mode=normal
+continuity_epoch=1
+boot_count=3
+model_hash=9991dc7ca8c4b854a5e6d93ffac9e0dfaf1778ff21d2e9f3319b7247f91005b6
+last_inference_ts=1774262311
+lifeline_enabled=1
+rlf_max_loops=16
+tick_count=3
+accuracy=100.0
+tps=285712.1
