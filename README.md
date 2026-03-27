@@ -9,6 +9,137 @@ By Djiby Diop
 `llm-baremetal` is the **sovereign runtime** of the larger Operating Organism vision.
 It is meant to be preserved and evolved as the bare-metal / survival / recovery pillar of the system, not replaced.
 
+---
+
+## Mamba SSM Baremetal Inference
+
+> Branch: `mamba-integration` | Status: **PARTIALLY BLOCKED** (AVX2 `#UD` in UEFI)
+
+This section documents how to build and run a **Mamba-2 2.7B** or **Mamba-1 130M**
+RLF reasoning model inside this UEFI runtime. The full integration notes are in
+[MAMBA_INTEGRATION.md](MAMBA_INTEGRATION.md).
+
+### Prerequisites
+
+- A trained Mamba-130M or Mamba-2 2.7B checkpoint from
+  [mamba2backbonerecursion](https://github.com/batteryphil/mamba2backbonerecursion)
+- Python 3.10+ with `mamba-ssm`, `transformers`, `torch` installed (for export step)
+- Linux build environment with `gnu-efi`, `mtools`, `gcc`
+
+### Step 1 — Export Weights to Binary
+
+On the Python/training machine, export the Mamba weights to a flat binary file
+the C runtime can load:
+
+```bash
+# Export the trained 130M checkpoint to model.mamba.bin (~260 MB)
+python export_mamba_baremetal.py \
+    --checkpoint saved_weights/mamba130m_v2_best.pt \
+    --model-id state-spaces/mamba-130m \
+    --out model.mamba.bin
+
+# Export the BPE tokenizer table to tokenizer.bin
+python export_bpe_table.py --out tokenizer.bin
+```
+
+For the 2.7B model:
+
+```bash
+python export_mamba_baremetal.py \
+    --checkpoint saved_weights/mamba130m_v2_best.pt \
+    --model-id state-spaces/mamba2-2.7b \
+    --out model_2.7b.mamba.bin
+```
+
+Both scripts are in the `mamba-integration` branch. Copy the output `.bin` files
+into the `models/` directory of this repo.
+
+### Step 2 — Build the Mamba EFI Application
+
+Switch to the `mamba-integration` branch and build with `MAMBA=1`:
+
+```bash
+git checkout mamba-integration
+
+# Scalar-only build (AVX2-free, safe in UEFI)
+make NOAVX2=1 MAMBA=1 repl
+
+# Or build the dedicated Mamba EFI app directly
+make llama2_efi_mamba.efi
+```
+
+The `NOAVX2=1` flag is **required** — AVX2 causes a `#UD` fault inside UEFI
+firmware because the OS has not yet called `XSETBV` to enable YMM registers.
+The scalar fallback is slower but UEFI-safe.
+
+### Step 3 — Create a Boot Image
+
+```bash
+# Build a boot image with the 130M Mamba model bundled
+MODEL=model.mamba.bin ./create-boot-mtools.sh
+
+# Or without bundling weights (copy them manually to the FAT partition later)
+NO_MODEL=1 ./create-boot-mtools.sh
+```
+
+### Step 4 — Test in QEMU
+
+```bash
+# Linux QEMU test (no KVM — tcg required because XSETBV is needed)
+./run-qemu.sh
+
+# Or via PowerShell wrapper
+./run.ps1 -Preflight -Gui
+```
+
+At the REPL prompt, load the model:
+
+```
+> /model_info model.mamba.bin
+> model=model.mamba.bin
+> hi
+```
+
+### Step 5 — Flash to USB and Boot Real Hardware
+
+```bash
+# Linux
+sudo dd if=llm-baremetal-boot.img of=/dev/sdX bs=4M conv=fsync status=progress
+
+# Copy model to the FAT partition if not bundled
+sudo mount /dev/sdX1 /mnt
+sudo cp model.mamba.bin /mnt/
+sudo umount /mnt
+```
+
+Boot the USB. The `llama2_efi_mamba.efi` REPL will start. Use `/diag` to confirm
+AVX2 status and `/cfg` to check model path.
+
+### Known Issues
+
+| Issue | Status |
+|-------|--------|
+| AVX2 `#UD` in UEFI pre-boot (YMM state not enabled) | ⚠️ Workaround: build with `NOAVX2=1` |
+| Scalar inference speed (~45s/pass for 2.7B, ~8s for 130M) | 🔧 See path forward below |
+| 2.7B model too large for standard 8GB image (2.85 GB) | ✅ Use 130M (260 MB) instead |
+
+### Path Forward (AVX2 Fix)
+
+To re-enable AVX2 in UEFI, add this to `llama2_efi_mamba.c` before any SSM call:
+
+```c
+// Enable AVX/YMM state in UEFI pre-OS environment
+UINT64 xcr0;
+asm volatile ("xgetbv" : "=A"(xcr0) : "c"(0));
+xcr0 |= 0x6;  // XSTATE_SSE | XSTATE_YMM
+asm volatile ("xsetbv" :: "A"(xcr0), "c"(0));
+```
+
+This requires `cpuid` check first to confirm XSAVE support (`CPUID.01H:ECX.XSAVE[bit 26]`).
+
+---
+
+
 ## Build (Windows + WSL)
 
 ### Model weights (not in git)
