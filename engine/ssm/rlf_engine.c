@@ -292,6 +292,7 @@ void rlf_preprocess(const char *prompt, RlfCtx *ctx) {
     }
 }
 
+#ifndef RLF_PREPROCESS_ONLY
 /* ── ConceptPerceptron ──────────────────────────────────────────────────── */
 void rlf_concept_perceptron(const RlfWeights *w, RlfCtx *ctx) {
     int D = RLF_D_MODEL, H = RLF_CP_HIDDEN, M = RLF_PREFIX_M;
@@ -325,6 +326,7 @@ void rlf_bridge_decode(const RlfWeights *w, RlfCtx *ctx, rlf_f32 *x_out) {
     rlf_linear_f16(w->bu_w, w->bu_b, ctx->bridge_latent, x_out,
                    RLF_D_BRIDGE, RLF_D_MODEL);
 }
+#endif /* !RLF_PREPROCESS_ONLY */
 
 /* ── Status printer ─────────────────────────────────────────────────────── */
 void rlf_status_print(const RlfWeights *w) {
@@ -340,6 +342,7 @@ void rlf_status_print(const RlfWeights *w) {
     repl_print("  bd_w       : "); repl_print(w->bd_w  ? "OK" : "MISSING"); repl_print("\r\n");
 }
 
+#ifndef RLF_PREPROCESS_ONLY
 /* ── Main inference entry ───────────────────────────────────────────────── */
 /*
  * rlf_infer wires the preprocessor → concept perceptron → backbone loop.
@@ -465,3 +468,4 @@ int rlf_infer(
 
     return ret;
 }
+#endif /* !RLF_PREPROCESS_ONLY */

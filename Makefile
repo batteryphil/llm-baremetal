@@ -25,7 +25,8 @@ endif
 # Canonical GNU-EFI build flags (known-good for this project)
 CFLAGS = -ffreestanding -fno-stack-protector -fpic -fshort-wchar -mno-red-zone \
 		 -I/usr/include/efi -I/usr/include/efi/$(ARCH) -DEFI_FUNCTION_WRAPPER \
-		 -Icore -Iengine/llama2 -Iengine/gguf -Iengine/djiblas -Iengine/ssm \
+		 -I. -Icore -Iengine/llama2 -Iengine/gguf -Iengine/djiblas -Iengine/ssm \
+		 -Iengine/ssm/core \
 		 -O2 -msse2 -DDJIBLAS_DISABLE_CPUID=1
 
 # Embed a build identifier for /version output (UTC). Override: make BUILD_ID=...
