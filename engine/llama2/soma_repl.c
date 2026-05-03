@@ -2807,6 +2807,128 @@ static void llmk_repl_no_model_loop(void) {
             Print(L"  Core backbone remains unchanged.\r\n\r\n");
             continue;
         }
+        /* ── RLF reasoning engine commands ─────────────────────────────── */
+        if (my_strncmp(prompt, "/rlf_load", 9) == 0) {
+            const char *arg = prompt + 9;
+            while (*arg == ' ' || *arg == '\t') arg++;
+            if (!arg[0]) {
+                Print(L"\r\nUsage: /rlf_load <file.ooss>\r\n");
+                Print(L"  Load RLF sidecar (ConceptPerceptron + bridge weights).\r\n");
+                Print(L"  Run /core_load <file.gguf> first.\r\n\r\n");
+                continue;
+            }
+            /* Map the file into memory using the same EFI read path */
+            void   *rlf_blob = NULL;
+            UINTN   rlf_len  = 0;
+            CHAR16  rlf_path16[192];
+            ascii_to_char16(rlf_path16, arg,
+                            (int)(sizeof(rlf_path16)/sizeof(rlf_path16[0])));
+            EFI_FILE_HANDLE rf = NULL;
+            EFI_STATUS rst = uefi_call_wrapper(g_root->Open, 5, g_root, &rf,
+                                               rlf_path16, EFI_FILE_MODE_READ, 0);
+            if (EFI_ERROR(rst) || !rf) {
+                Print(L"\r\n[RLF] ERROR: cannot open %s (%r)\r\n\r\n", rlf_path16, rst);
+                continue;
+            }
+            EFI_FILE_INFO *rfi = NULL;
+            UINTN rfi_sz = SIZE_OF_EFI_FILE_INFO + 256;
+            uefi_call_wrapper(BS->AllocatePool, 3, EfiLoaderData, rfi_sz, (void**)&rfi);
+            if (rfi) {
+                uefi_call_wrapper(rf->GetInfo, 4, rf, &gEfiFileInfoGuid, &rfi_sz, rfi);
+                rlf_len = (UINTN)rfi->FileSize;
+                uefi_call_wrapper(BS->FreePool, 1, rfi);
+            }
+            if (rlf_len == 0) {
+                Print(L"\r\n[RLF] ERROR: empty or unreadable file\r\n\r\n");
+                uefi_call_wrapper(rf->Close, 1, rf);
+                continue;
+            }
+            rlf_blob = llmk_arena_alloc(&g_zones, LLMK_ARENA_WEIGHTS, rlf_len, 64);
+            if (!rlf_blob) {
+                Print(L"\r\n[RLF] ERROR: not enough arena space (%d MB)\r\n\r\n",
+                      (int)(rlf_len/(1024*1024)));
+                uefi_call_wrapper(rf->Close, 1, rf);
+                continue;
+            }
+            UINTN rd = rlf_len;
+            uefi_call_wrapper(rf->Read, 3, rf, &rd, rlf_blob);
+            uefi_call_wrapper(rf->Close, 1, rf);
+            if (rd != rlf_len) {
+                Print(L"\r\n[RLF] ERROR: short read (%d / %d bytes)\r\n\r\n",
+                      (int)rd, (int)rlf_len);
+                continue;
+            }
+            static RlfWeights g_rlf_weights;
+            int rrc = rlf_ooss_load(rlf_blob, (unsigned long)rlf_len, &g_rlf_weights);
+            if (rrc != 0) {
+                Print(L"\r\n[RLF] ERROR: OOSS parse failed (code=%d)\r\n\r\n", rrc);
+                continue;
+            }
+            g_rlf_weights_ptr = &g_rlf_weights;
+            Print(L"\r\n[RLF] loaded: %s (%d MB)\r\n", rlf_path16,
+                  (int)(rlf_len/(1024*1024)));
+            Print(L"  cp_w1=%s  bd_w=%s  lifeline=%s  loop_norm=%s\r\n",
+                  g_rlf_weights.cp_w1      ? L"OK" : L"--",
+                  g_rlf_weights.bd_w       ? L"OK" : L"--",
+                  g_rlf_weights.lifeline_gate > 0.0f ? L"OK" : L"--",
+                  g_rlf_weights.loop_norm_w ? L"OK" : L"--");
+            Print(L"  halt_token=7803  max_loops=6  d_bridge=128\r\n\r\n");
+            continue;
+        }
+        if (my_strncmp(prompt, "/rlf_status", 11) == 0) {
+            extern void rlf_status_print(const RlfWeights *);
+            rlf_status_print(g_rlf_weights_ptr);
+            Print(L"\r\n");
+            continue;
+        }
+        if (my_strncmp(prompt, "/rlf_preprocess", 15) == 0) {
+            const char *arg = prompt + 15;
+            while (*arg == ' ' || *arg == '\t') arg++;
+            if (!arg[0]) {
+                Print(L"\r\nUsage: /rlf_preprocess <prompt>\r\n\r\n");
+                continue;
+            }
+            static RlfCtx pp_ctx;
+            rlf_preprocess(arg, &pp_ctx);
+            Print(L"\r\n[RLF-PP] %a\r\n", pp_ctx.prompt_pp);
+            for (int bi = 0; bi < pp_ctx.env.n; bi++) {
+                RlfBinding *b = &pp_ctx.env.bindings[bi];
+                if (b->resolved) {
+                    char nbuf[32]; rlf_ftoa(b->numeric, nbuf);
+                    Print(L"  %a = %a\r\n", b->name, nbuf);
+                } else {
+                    Print(L"  %a = %a (unresolved)\r\n", b->name, b->value);
+                }
+            }
+            Print(L"\r\n");
+            continue;
+        }
+        if (my_strncmp(prompt, "/rlf_infer", 10) == 0) {
+            const char *arg = prompt + 10;
+            while (*arg == ' ' || *arg == '\t') arg++;
+            if (!arg[0]) {
+                Print(L"\r\nUsage: /rlf_infer <prompt>\r\n\r\n");
+                continue;
+            }
+            if (!g_oosi_v3_valid && !g_oosi_weights_valid) {
+                Print(L"\r\n[RLF] ERROR: no backbone loaded. Use /core_load first.\r\n\r\n");
+                continue;
+            }
+            if (!g_rlf_weights_ptr) {
+                Print(L"\r\n[RLF] ERROR: no RLF weights. Use /rlf_load first.\r\n\r\n");
+                continue;
+            }
+            /* For now call the symbolic preprocessor + print result.
+             * Full backbone hookup requires mamba_forward/mamba_lm_head stubs
+             * to be resolved against the loaded v3 context — wired in Phase 2. */
+            static RlfCtx infer_ctx;
+            rlf_preprocess(arg, &infer_ctx);
+            Print(L"\r\n[RLF] preprocessed: %a\r\n", infer_ctx.prompt_pp);
+            Print(L"[RLF] bindings resolved: %d\r\n", infer_ctx.env.n);
+            Print(L"[RLF] (full latent loop requires GGUF backbone bridge - use /ssm_infer for now)\r\n\r\n");
+            continue;
+        }
+        /* ── end RLF commands ─────────────────────────────────────────── */
         if (my_strncmp(prompt, "/attach_load", 12) == 0) {
             const char *arg = prompt + 12;
             while (*arg == ' ' || *arg == '\t') arg++;
@@ -2850,6 +2972,7 @@ static void llmk_repl_no_model_loop(void) {
             Print(L"\r\n[SSM] Mamba bare-metal engine v0.1\r\n");
             Print(L"  Commands: /ssm_load <file>, /ssm_infer <text>, /ssm_reset\r\n");
             Print(L"  Mind cmds: /core_load <file>, /mind_diag, /mind_halt_probe [x], /mind_halt_decide [x] [t], /mind_halt_sweep [a] [b] [s] [t], /mind_halt_policy [t] [on|off], /mind_halt_policy_save, /mind_halt_policy_load, /mind_halt_policy_apply_saved, /mind_halt_policy_apply_saved_if_needed, /mind_halt_policy_sync, /mind_halt_policy_sync_force, /mind_halt_policy_audit, /mind_audit, /mind_doctor, /mind_next, /mind_snapshot, /mind_ready, /mind_bootstrap_v1, /mind_path_v1, /oo_sidecar <file>, /oo_sidecar_audit, /oo_sidecar_unload, /attach_load <file>, /attach_audit, /attach_policy, /attach_policy_audit, /attach_policy_diff, /attach_policy_sync, /attach_policy_sync_force, /attach_unload, /mind_halt_policy_reset, /mind_halt_policy_diff, /mind_status\r\n");
+            Print(L"  RLF cmds: /rlf_load <file.ooss>, /rlf_status, /rlf_preprocess <prompt>, /rlf_infer <prompt>\r\n");
             Print(L"  Weight format: MAMB binary\r\n");
             Print(L"  Exporters: runtime export_mamba_baremetal.py | oo-model export_mamb_binary.py\r\n");
             Print(L"  Architecture: Mamba SSM, freestanding, O(1) memory per token\r\n");

@@ -270,6 +270,11 @@ static void llmk_copy_ascii_bounded(char *dst, int dst_cap, const char *src) {
 }
 
 
+/* ── RLF reasoning engine ─────────────────────────────────────────── */
+#include "../ssm/rlf_engine.h"
+/* Global RLF weights pointer — set by /rlf_load, read by /rlf_infer  */
+static RlfWeights *g_rlf_weights_ptr = (void*)0;
+
 /* ── Unity includes (compiled as one translation unit) ───────────── */
 #include "soma_mind.c"
 #include "soma_loader.c"
