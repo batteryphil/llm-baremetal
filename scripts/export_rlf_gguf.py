@@ -17,14 +17,17 @@ Load with: /core_load mamba1_4b_rlf.gguf  then  /rlf_load mamba1_4b_rlf.ooss
 """
 
 import argparse
-import json
 import struct
 import sys
 from pathlib import Path
 
 import torch
 import numpy as np
-from transformers import AutoModelForCausalLM
+
+# mamba_ssm must be importable — add project dir to path if needed
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] /
+                       '../mamba2backbonerecursion/mamba14b'))
+from mamba_ssm import MambaLMHeadModel
 
 
 # ── Constants ────────────────────────────────────────────────────────────────
@@ -241,14 +244,16 @@ def merge_lora(base_state: dict, lora_state: dict,
     for key in lora_A:
         if key not in lora_B:
             continue
-        if key not in merged:
+        # LoRA keys are bare 'layers.N...' but base state dict has 'backbone.layers.N...'
+        base_key = 'backbone.' + key
+        if base_key not in merged:
             print(f'  WARN: LoRA key {key} not in base model, skipping')
             continue
         A     = lora_A[key].float()      # [r, d_in]
         B     = lora_B[key].float()      # [d_out, r]
         scale = lora_scale.get(key, 1.0)
         delta = scale * (B @ A)          # [d_out, d_in]
-        merged[key] = merged[key].float() + delta.to(merged[key].dtype)
+        merged[base_key] = merged[base_key].float() + delta.to(merged[base_key].dtype)
         applied += 1
 
     print(f'  LoRA: merged {applied} adapter pairs into base weights')
@@ -280,10 +285,10 @@ def main() -> None:
 
     print('=== RLF GGUF Export ===')
 
-    # 1. Load base model
+    # 1. Load base model using MambaLMHeadModel (matches training setup)
     print(f'\n[1/5] Loading base model: {args.base}')
-    base_model = AutoModelForCausalLM.from_pretrained(
-        args.base, trust_remote_code=True, torch_dtype=torch.float32
+    base_model = MambaLMHeadModel.from_pretrained(
+        args.base, dtype=torch.float32, device='cpu'
     )
     base_state = base_model.state_dict()
     print(f'  Base params: {sum(p.numel() for p in base_model.parameters()):,}')
@@ -400,10 +405,10 @@ def main() -> None:
         return torch.load(ckpt_dir / fname, map_location='cpu',
                           weights_only=True)
 
-    # ConceptPerceptron layers (MLP)
+    # ConceptPerceptron layers
     cp_state = load_pt('concept_perceptron.pt')
     for k, v in cp_state.items():
-        # e.g. 'mapper.0.weight', 'mapper.2.weight', ...
+        # keys: 'scale', 'mapper.0.weight', 'mapper.0.bias', 'mapper.2.weight', 'mapper.2.bias'
         safe_key = 'rlf.perceptron.' + k.replace('.', '_')
         ooss_tensors[safe_key] = v.float().numpy()
         print(f'  + {safe_key}: {tuple(v.shape)}')
@@ -416,15 +421,20 @@ def main() -> None:
     for k, v in bu_state.items():
         ooss_tensors['rlf.bridge_up.' + k.replace('.', '_')] = v.float().numpy()
 
-    # Lifeline gate (scalar)
-    lg_state = load_pt('lifeline_gate.pt')
-    for k, v in lg_state.items():
-        ooss_tensors['rlf.lifeline.' + k.replace('.', '_')] = v.float().numpy()
+    # Lifeline gate — stored as raw tensor [D_MODEL], not a state dict
+    lg_raw = load_pt('lifeline_gate.pt')
+    if isinstance(lg_raw, dict):
+        for k, v in lg_raw.items():
+            ooss_tensors['rlf.lifeline.' + k.replace('.', '_')] = v.float().numpy()
+    else:
+        ooss_tensors['rlf.lifeline.vector'] = lg_raw.float().numpy()
+        print(f'  + rlf.lifeline.vector: {tuple(lg_raw.shape)}')
 
     # Loop RMSNorm
     ln_state = load_pt('loop_norm.pt')
     for k, v in ln_state.items():
         ooss_tensors['rlf.loop_norm.' + k.replace('.', '_')] = v.float().numpy()
+        print(f'  + rlf.loop_norm.{k}: {tuple(v.shape)}')
 
     write_ooss(out_ooss, ooss_tensors)
 
