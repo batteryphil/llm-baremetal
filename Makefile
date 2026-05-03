@@ -88,6 +88,7 @@ REPL_OBJS = llmk_zones.o llmk_log.o llmk_sentinel.o llmk_oo.o llmk_oo_infer.o \
 	ssm_infer.o mamba_block.o mamba_weights.o bpe_tokenizer.o \
 	oosi_loader.o oosi_infer.o oosi_v3_loader.o oosi_v3_infer.o \
 	$(SOMA_OBJS) \
+	rlf_engine.o rlf_repl.o \
 	oo-modules/djibion-engine/core/djibion.o \
 	oo-modules/diopion-engine/core/diopion.o \
 	oo-modules/diagnostion-engine/core/diagnostion.o \
@@ -108,7 +109,13 @@ REPL_SO  = llama2_repl.so
 
 all: repl
 
-.PHONY: all repl clean rebuild genome test oo-subsystems
+.PHONY: all repl clean rebuild genome test oo-subsystems bench
+
+bench:
+	@echo "Compiling DRAM Benchmark Suite..."
+	$(CC) -O2 -pthread bench/dram_benchmark.c -o bench/dram_benchmark
+	@echo "Running DRAM Benchmark..."
+	./bench/dram_benchmark
 
 oo-subsystems:
 	@if test -f $(OO_BUILD_DIR)/liboo-kernel.a; then \
@@ -327,6 +334,12 @@ engine/ssm/soma_spec.o: engine/ssm/soma_spec.c engine/ssm/soma_spec.h engine/ssm
 
 engine/ssm/soma_swarm_net.o: engine/ssm/soma_swarm_net.c engine/ssm/soma_swarm_net.h engine/ssm/soma_dna.h engine/ssm/oosi_v3_infer.h
 	$(CC) $(CFLAGS) -c engine/ssm/soma_swarm_net.c -o engine/ssm/soma_swarm_net.o
+
+rlf_engine.o: engine/ssm/rlf_engine.c engine/ssm/rlf_engine.h engine/ssm/mamba_block.h
+	$(CC) $(CFLAGS) -c engine/ssm/rlf_engine.c -o rlf_engine.o
+
+rlf_repl.o: engine/ssm/rlf_repl.c engine/ssm/rlf_engine.h engine/gguf/gguf_loader.h
+	$(CC) $(CFLAGS) -c engine/ssm/rlf_repl.c -o rlf_repl.o
 
 clean:
 	rm -f $(REPL_OBJS) $(REPL_SO) $(TARGET) $(METABION_PROFILE_HDR)
