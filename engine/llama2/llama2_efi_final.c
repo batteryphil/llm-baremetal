@@ -278,6 +278,7 @@ static RlfWeights *g_rlf_weights_ptr = (void*)0;
 /* ── Unity includes (compiled as one translation unit) ───────────── */
 #include "soma_mind.c"
 #include "soma_loader.c"
+#include "rlf_backbone_bridge.c"   /* RLF ↔ OOSI v3 backend bridge     */
 #include "soma_repl.c"
 #include "soma_inference.c"
 #include "soma_boot.c"

@@ -2918,14 +2918,23 @@ static void llmk_repl_no_model_loop(void) {
                 Print(L"\r\n[RLF] ERROR: no RLF weights. Use /rlf_load first.\r\n\r\n");
                 continue;
             }
-            /* For now call the symbolic preprocessor + print result.
-             * Full backbone hookup requires mamba_forward/mamba_lm_head stubs
-             * to be resolved against the loaded v3 context — wired in Phase 2. */
-            static RlfCtx infer_ctx;
-            rlf_preprocess(arg, &infer_ctx);
-            Print(L"\r\n[RLF] preprocessed: %a\r\n", infer_ctx.prompt_pp);
-            Print(L"[RLF] bindings resolved: %d\r\n", infer_ctx.env.n);
-            Print(L"[RLF] (full latent loop requires GGUF backbone bridge - use /ssm_infer for now)\r\n\r\n");
+            static RlfCtx  infer_ctx;
+            static char    rlf_answer[64];
+            int n_loops = 0;
+            Print(L"\r\n[RLF] reasoning...\r\n");
+            int rrc = rlf_infer(
+                arg,
+                (void*)0,            /* backbone — bridge uses g_oosi_v3_ctx */
+                g_rlf_weights_ptr,
+                &infer_ctx,
+                rlf_answer, (int)sizeof(rlf_answer),
+                &n_loops
+            );
+            Print(L"[RLF] answer: %a\r\n", rlf_answer[0] ? rlf_answer : "(none)");
+            if (rrc == 0)
+                Print(L"[RLF] loops: %d (HALT)\r\n\r\n", n_loops);
+            else
+                Print(L"[RLF] loops: %d (max reached)\r\n\r\n", n_loops);
             continue;
         }
         /* ── end RLF commands ─────────────────────────────────────────── */
